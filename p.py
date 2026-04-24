@@ -22,19 +22,31 @@ REPO_PATH = "repo"
 @st.cache_resource
 def load_or_create(repo_url):
 
-    # embeddings + llm
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
     llm = OllamaLLM(model="llama3.2:3b", temperature=0.2)
 
-    # 🔥 Load existing index
+     
     if os.path.exists(INDEX_PATH):
-        vector_store = FAISS.load_local(INDEX_PATH, embeddings)
-        retriever = vector_store.as_retriever(search_kwargs={"k": 5})
-        return vector_store, retriever, llm
+        try:
+            vector_store = FAISS.load_local(
+                INDEX_PATH,
+                embeddings,
+                allow_dangerous_deserialization=True   
+            )
+            retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+            return vector_store, retriever, llm
 
-    # 🔥 Clone repo
-    if not os.path.exists(REPO_PATH):
-        Repo.clone_from(repo_url, REPO_PATH)
+        except Exception:
+             
+            import shutil
+            shutil.rmtree(INDEX_PATH)
+
+     
+    if os.path.exists(REPO_PATH):
+        import shutil
+        shutil.rmtree(REPO_PATH)
+
+    Repo.clone_from(repo_url, REPO_PATH)
 
     documents = []
 
@@ -58,16 +70,14 @@ def load_or_create(repo_url):
     splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
     chunks = splitter.split_documents(documents)
 
-  
     vector_store = FAISS.from_documents(chunks, embeddings)
 
-
+   
     vector_store.save_local(INDEX_PATH)
 
     retriever = vector_store.as_retriever(search_kwargs={"k": 5})
 
     return vector_store, retriever, llm
-
 
 
 
@@ -82,12 +92,14 @@ if st.button("Load Repo"):
 
             prompt = PromptTemplate(
                 template="""
-You are a senior developer.
+You are a senior software engineer.
 
 Rules:
-- Answer ONLY from context
-- If not found say "I don't know"
-- Mention file name if possible
+1. First try to answer from the given context
+2. If context is not sufficient, use your own knowledge
+3. If user asks about error, debug and give solution
+4. Always give helpful and complete answer
+5. Mention file name if possible
 
 Context:
 {context}
@@ -123,7 +135,7 @@ Question:
             chain = parallel_chain | prompt | llm | parser
 
             st.session_state.chain = chain
-            st.success("✅ Repo Ready!")
+            st.success("Repo Ready!")
 
 
 
@@ -132,15 +144,21 @@ if "chain" in st.session_state:
     if "history" not in st.session_state:
         st.session_state.history = []
 
+    if "last_query" not in st.session_state:
+        st.session_state.last_query = ""
+
     user_input = st.chat_input("Ask about the code...")
 
     if user_input:
+        st.session_state.last_query = user_input   
+
         st.session_state.history.append(("user", user_input))
 
         response = st.session_state.chain.invoke(user_input)
+
         st.session_state.history.append(("ai", response))
 
-
+ 
     for role, msg in st.session_state.history:
         if role == "user":
             st.chat_message("user").write(msg)
